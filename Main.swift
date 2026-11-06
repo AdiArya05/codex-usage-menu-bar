@@ -1,4 +1,5 @@
 import AppKit
+import CoreText
 import SwiftUI
 
 @MainActor
@@ -20,6 +21,9 @@ private func codexIcon(size: CGFloat) -> NSImage {
         outline.line(to: point(5.2, 6.4))
         outline.move(to: point(8.6, 6.4))
         outline.line(to: point(11, 6.4))
+        let ink = outline.bounds
+        outline.transform(using: AffineTransform(translationByX: size / 2 - ink.midX,
+                                                 byY: size / 2 - ink.midY))
         NSColor.black.setStroke()
         outline.lineWidth = 1.25 * scale
         outline.lineCapStyle = .round
@@ -319,13 +323,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ])
         let icon = statusIcon
         let gap: CGFloat = 8
-        let labelSize = label.size()
-        let image = NSImage(size: NSSize(width: ceil(icon.size.width + gap + labelSize.width),
-                                        height: 20), flipped: false) { bounds in
+        let line = CTLineCreateWithAttributedString(label)
+        let ink = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
+        let labelWidth = ceil(label.size().width)
+        let image = NSImage(size: NSSize(width: icon.size.width + gap + labelWidth,
+                                        height: 18), flipped: false) { bounds in
+            guard let context = NSGraphicsContext.current?.cgContext else { return false }
             icon.draw(at: NSPoint(x: 0, y: (bounds.height - icon.size.height) / 2),
                       from: .zero, operation: .sourceOver, fraction: 1)
-            label.draw(at: NSPoint(x: icon.size.width + gap,
-                                   y: (bounds.height - labelSize.height) / 2))
+            // Center the visible glyphs, independent of the font's line spacing.
+            context.saveGState()
+            context.textMatrix = .identity
+            context.textPosition = CGPoint(x: icon.size.width + gap + labelWidth / 2 - ink.midX,
+                                           y: bounds.midY - ink.midY)
+            CTLineDraw(line, context)
+            context.restoreGState()
             return true
         }
         image.isTemplate = true
