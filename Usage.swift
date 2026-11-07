@@ -157,20 +157,14 @@ final class Usage: ObservableObject {
     }
 
     private func connect() {
-        let candidates = [
-            "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
-            "/Applications/Codex.app/Contents/Resources/codex",
-            "/opt/homebrew/bin/codex", "/usr/local/bin/codex"
-        ] + (ProcessInfo.processInfo.environment["PATH"] ?? "")
-            .split(separator: ":").map { "\($0)/codex" }
-        guard let executable = candidates.first(where: FileManager.default.isExecutableFile(atPath:)) else {
+        guard let executable = codexExecutable() else {
             fail("Codex CLI unavailable")
             return
         }
         let child = Process()
         let stdin = Pipe()
         let stdout = Pipe()
-        child.executableURL = URL(fileURLWithPath: executable)
+        child.executableURL = executable
         child.arguments = ["app-server", "--listen", "stdio://"]
         child.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
         child.standardInput = stdin

@@ -33,6 +33,7 @@ final class ActivityMonitor {
     private var localTurns: [String: String] = [:]
     private let home: URL
     private let questions: PendingQuestions
+    private let cloud = CloudActivity()
     private var hasPendingQuestions = false
     private let startedAt = Date()
     private var recentOutcome: CodexSignal?
@@ -69,11 +70,13 @@ final class ActivityMonitor {
         queue.async {
             self.timer?.cancel()
             self.timer = nil
+            self.cloud.stop()
             self.disconnect()
         }
     }
 
     private func poll() {
+        cloud.poll(on: queue) { [weak self] in self?.publishActivity() }
         if let pending = questions.poll() { hasPendingQuestions = pending }
         recentOutcome = readRecentOutcome()
         if let turns = activeTurns() { localTurns = turns }
@@ -364,8 +367,10 @@ final class ActivityMonitor {
             guard let subscription = followed[thread], subscription.turnID == turn else { return true }
             return subscription.status["type"] == nil
         }
-        let next = CodexActivity(working: active.count > waitingTurns.count || hasUnobservedWork,
-                                 signal: waiting ? .needsInput : recentOutcome)
+        let outcomes = [recentOutcome, cloud.outcome]
+        let outcome: CodexSignal? = outcomes.contains(.failed) ? .failed : outcomes.compactMap { $0 }.first
+        let next = CodexActivity(working: active.count > waitingTurns.count || hasUnobservedWork || cloud.working,
+                                 signal: waiting ? .needsInput : outcome)
         guard next != activity else { return }
         activity = next
         DispatchQueue.main.async { [onChange] in onChange(next) }
