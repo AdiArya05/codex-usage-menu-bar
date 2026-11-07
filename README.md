@@ -2,7 +2,7 @@
 
 A native Mac menu bar app that shows your remaining Codex quota. Click the Codex icon for a compact panel with live usage, reset countdowns, and earned reset credits.
 
-The Codex icon animates while a local Codex Desktop turn is active. An amber dot means a turn is waiting for input or approval. The activity indicator uses the installed desktop app’s local thread stream. The quota percentage stays visible in every state.
+The Codex icon animates while a local Codex Desktop turn is active. An amber dot means a local chat has a pending question or approval, including a question left open after a turn ends. The app reads the installed desktop app’s local thread stream and question records. The quota percentage stays visible in every state.
 
 ## Build and run
 

@@ -19,6 +19,8 @@ final class ActivityMonitor {
     }
 
     private let home: URL
+    private let questions: PendingQuestions
+    private var hasPendingQuestions = false
     private let onChange: (CodexActivity) -> Void
     private let queue = DispatchQueue(label: "CodexUsage.Activity", qos: .utility)
     private var timer: DispatchSourceTimer?
@@ -33,6 +35,7 @@ final class ActivityMonitor {
         let path = ProcessInfo.processInfo.environment["CODEX_HOME"]
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex").path
         home = URL(fileURLWithPath: path)
+        questions = PendingQuestions(home: home)
         self.onChange = onChange
     }
 
@@ -56,6 +59,10 @@ final class ActivityMonitor {
     }
 
     private func poll() {
+        if let pending = questions.poll(), pending != hasPendingQuestions {
+            hasPendingQuestions = pending
+            publishActivity()
+        }
         guard connection != nil else {
             let socket = home.appendingPathComponent("ipc/ipc.sock").path
             guard FileManager.default.fileExists(atPath: socket) else { return }
@@ -272,7 +279,7 @@ final class ActivityMonitor {
 
     private func publishActivity() {
         let active = followed.values.filter { $0.status["type"] as? String == "active" }
-        let waiting = active.contains {
+        let waiting = hasPendingQuestions || active.contains {
             let flags = $0.status["activeFlags"] as? [String] ?? []
             return flags.contains("waitingOnApproval") || flags.contains("waitingOnUserInput")
         }
