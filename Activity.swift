@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Network
 import SQLite3
@@ -29,6 +30,7 @@ final class ActivityMonitor {
         var status: [String: Any] = [:]
     }
 
+    private var localTurns: [String: String] = [:]
     private let home: URL
     private let questions: PendingQuestions
     private var hasPendingQuestions = false
@@ -74,6 +76,7 @@ final class ActivityMonitor {
     private func poll() {
         if let pending = questions.poll() { hasPendingQuestions = pending }
         recentOutcome = readRecentOutcome()
+        if let turns = activeTurns() { localTurns = turns }
         defer { publishActivity() }
         guard connection != nil else {
             let socket = home.appendingPathComponent("ipc/ipc.sock").path
@@ -81,11 +84,11 @@ final class ActivityMonitor {
             connect(socket)
             return
         }
-        guard clientID != nil, let turns = activeTurns() else { return }
-        for (thread, subscription) in followed where turns[thread] != subscription.turnID {
+        guard clientID != nil else { return }
+        for (thread, subscription) in followed where localTurns[thread] != subscription.turnID {
             unfollow(thread)
         }
-        for (thread, turn) in turns {
+        for (thread, turn) in localTurns {
             if let subscription = followed[thread],
                subscription.owner != nil || Date().timeIntervalSince(subscription.requestedAt) < 10 {
                 continue
@@ -120,13 +123,6 @@ final class ActivityMonitor {
     }
 
     private func activeTurns() -> [String: String]? {
-        let lockDirectory = home.appendingPathComponent("thread-writer-locks")
-        let files = (try? FileManager.default.contentsOfDirectory(atPath: lockDirectory.path)) ?? []
-        let ids = files.filter { $0.hasSuffix(".lock") }
-            .map { String($0.dropLast(5)) }
-            .filter { UUID(uuidString: $0) != nil }
-        guard !ids.isEmpty else { return [:] }
-
         var database: OpaquePointer?
         let path = home.appendingPathComponent("thread_history_1.sqlite").path
         let result = sqlite3_open_v2(path, &database, SQLITE_OPEN_READONLY, nil)
@@ -135,29 +131,49 @@ final class ActivityMonitor {
 
         var statement: OpaquePointer?
         let sql = """
-            SELECT turn_id, status FROM thread_turns
-            WHERE thread_id = ? ORDER BY rollout_ordinal DESC LIMIT 1
+            SELECT t.thread_id, t.turn_id, coalesce(
+                (SELECT i.created_at_ms / 1000.0 FROM thread_items i
+                 WHERE i.thread_id = t.thread_id AND i.turn_id = t.turn_id
+                 ORDER BY i.rollout_ordinal DESC LIMIT 1), t.started_at, 0)
+            FROM thread_turns t
+            WHERE t.status = 'inProgress'
+              AND NOT EXISTS (
+                SELECT 1 FROM thread_turns later
+                WHERE later.thread_id = t.thread_id AND later.rollout_ordinal > t.rollout_ordinal
+              )
             """
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else { return nil }
         defer { sqlite3_finalize(statement) }
 
         var turns: [String: String] = [:]
-        for id in ids {
-            let result = id.withCString { identifier in
-                sqlite3_bind_text(statement, 1, identifier, -1, nil)
-                let result = sqlite3_step(statement)
-                if result == SQLITE_ROW,
-                   let status = sqlite3_column_text(statement, 1), String(cString: status) == "inProgress",
-                   let turn = sqlite3_column_text(statement, 0) {
-                    turns[id] = String(cString: turn)
-                }
-                sqlite3_reset(statement)
-                sqlite3_clear_bindings(statement)
-                return result
+        let recentCutoff = Date().addingTimeInterval(-45).timeIntervalSince1970
+        while true {
+            let result = sqlite3_step(statement)
+            if result == SQLITE_DONE { return turns }
+            guard result == SQLITE_ROW, let thread = sqlite3_column_text(statement, 0),
+                  let turn = sqlite3_column_text(statement, 1) else { return nil }
+
+            let threadID = String(cString: thread)
+            let turnID = String(cString: turn)
+            let observed = followed[threadID].map {
+                $0.turnID == turnID && $0.status["type"] as? String == "active"
+            } ?? false
+            let recent = sqlite3_column_double(statement, 2) >= recentCutoff
+            if observed || recent || hasLiveWriter(threadID) {
+                turns[threadID] = turnID
             }
-            guard result == SQLITE_ROW || result == SQLITE_DONE else { return nil }
         }
-        return turns
+    }
+
+    private func hasLiveWriter(_ thread: String) -> Bool {
+        guard UUID(uuidString: thread) != nil else { return false }
+        let path = home.appendingPathComponent("thread-writer-locks").appendingPathComponent("\(thread).lock").path
+        let descriptor = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else { return false }
+        // A lock file can survive a crash. A shared, nonblocking probe
+        // distinguishes a live exclusive writer from a leftover file.
+        defer { close(descriptor) }
+        return flock(descriptor, LOCK_SH | LOCK_NB) == -1 && errno == EWOULDBLOCK
     }
 
     private func connect(_ socket: String) {
@@ -344,7 +360,11 @@ final class ActivityMonitor {
             return flags.contains("waitingOnApproval") || flags.contains("waitingOnUserInput")
         }
         let waiting = hasPendingQuestions || !waitingTurns.isEmpty
-        let next = CodexActivity(working: active.count > waitingTurns.count,
+        let hasUnobservedWork = localTurns.contains { thread, turn in
+            guard let subscription = followed[thread], subscription.turnID == turn else { return true }
+            return subscription.status["type"] == nil
+        }
+        let next = CodexActivity(working: active.count > waitingTurns.count || hasUnobservedWork,
                                  signal: waiting ? .needsInput : recentOutcome)
         guard next != activity else { return }
         activity = next
