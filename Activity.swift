@@ -9,10 +9,23 @@ enum CodexSignal: String {
     case failed = "Turn failed"
 }
 
+struct WorkingChat: Equatable, Identifiable {
+    let id: String
+    let title: String
+    let directory: String?
+
+    init(id: String, title: String?, directory: String? = nil) {
+        self.id = id
+        let name = title?.split(whereSeparator: \.isWhitespace).joined(separator: " ") ?? ""
+        self.title = name.isEmpty ? "Codex task" : name
+        self.directory = directory?.isEmpty == false ? directory : nil
+    }
+}
+
 struct CodexActivity: Equatable {
     let working: Bool
     let signal: CodexSignal?
-    var workingChatTitles: [String] = []
+    var workingChats: [WorkingChat] = []
 
     static let idle = CodexActivity(working: false, signal: nil)
 
@@ -362,7 +375,7 @@ final class ActivityMonitor {
         }
     }
 
-    private func workingChatTitles(for threads: Set<String>) -> [String] {
+    private func workingChats(for threads: Set<String>) -> [WorkingChat] {
         guard !threads.isEmpty else { return [] }
         var database: OpaquePointer?
         let path = home.appendingPathComponent("state_5.sqlite").path
@@ -371,20 +384,21 @@ final class ActivityMonitor {
         guard result == SQLITE_OK else { return [] }
 
         var statement: OpaquePointer?
-        let sql = "SELECT substr(coalesce(nullif(name, ''), title), 1, 200) FROM threads WHERE id = ?"
+        let sql = "SELECT substr(coalesce(nullif(name, ''), title), 1, 200), cwd FROM threads WHERE id = ?"
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else { return [] }
         defer { sqlite3_finalize(statement) }
 
         return threads.compactMap { thread in
-            thread.withCString { id -> String? in
+            thread.withCString { id -> WorkingChat? in
                 sqlite3_bind_text(statement, 1, id, -1, nil)
                 defer {
                     sqlite3_reset(statement)
                     sqlite3_clear_bindings(statement)
                 }
-                guard sqlite3_step(statement) == SQLITE_ROW,
-                      let title = sqlite3_column_text(statement, 0) else { return nil }
-                return String(cString: title)
+                guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+                let title = sqlite3_column_text(statement, 0).map { String(cString: $0) }
+                let directory = sqlite3_column_text(statement, 1).map { String(cString: $0) }
+                return WorkingChat(id: thread, title: title, directory: directory)
             }
         }
     }
@@ -401,14 +415,15 @@ final class ActivityMonitor {
             return subscription.status["type"] == nil
         }
         let running = Set(active.keys).subtracting(waitingTurns.keys).union(unobserved.keys)
-        let names = workingChatTitles(for: running) + cloud.workingTitles
-        let titles = Set(names.map { $0.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
-            .filter { !$0.isEmpty }).sorted()
+        let chats = (workingChats(for: running) + cloud.workingChats).sorted {
+            if $0.title == $1.title { return $0.id < $1.id }
+            return $0.title.localizedStandardCompare($1.title) == .orderedAscending
+        }
         let outcomes = [recentOutcome, cloud.outcome]
         let outcome: CodexSignal? = outcomes.contains(.failed) ? .failed : outcomes.compactMap { $0 }.first
         let next = CodexActivity(working: !running.isEmpty || cloud.working,
                                  signal: waiting ? .needsInput : outcome,
-                                 workingChatTitles: titles)
+                                 workingChats: chats)
         guard next != activity else { return }
         activity = next
         DispatchQueue.main.async { [onChange] in onChange(next) }

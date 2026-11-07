@@ -89,14 +89,7 @@ struct Dashboard: View {
                     }
                 }
                 if usage.activity.working {
-                    let titles = usage.activity.workingChatTitles.joined(separator: " · ")
-                    VStack(alignment: .leading, spacing: 4) {
-                        section("Working on")
-                        Text(titles.isEmpty ? "Codex task" : titles)
-                            .font(.subheadline)
-                            .lineLimit(2)
-                            .help(titles)
-                    }
+                    workingOn
                 }
                 Divider()
                 resetDetails
@@ -128,6 +121,37 @@ struct Dashboard: View {
         .padding(20)
         .frame(width: 420)
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var workingOn: some View {
+        let chats = usage.activity.workingChats
+        return VStack(alignment: .leading, spacing: 8) {
+            section("Working on")
+            if chats.isEmpty {
+                Text("Codex task").font(.system(size: 16, weight: .semibold))
+            }
+            ForEach(chats.prefix(3)) { chat in
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(chat.title)
+                        .font(.system(size: 16, weight: .semibold))
+                        .lineLimit(1)
+                        .help(chat.title)
+                    if let directory = chat.directory {
+                        Label(URL(fileURLWithPath: directory).lastPathComponent, systemImage: "folder")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .help(directory)
+                    }
+                }
+            }
+            if chats.count > 3 {
+                Text("+\(chats.count - 3) more")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .help(chats.dropFirst(3).map(\.title).joined(separator: "\n"))
+            }
+        }
     }
 
     private var syncLabel: String {
@@ -181,10 +205,9 @@ struct Dashboard: View {
                         .stroke(.green, style: StrokeStyle(lineWidth: 4, lineCap: .round))
                         .rotationEffect(.degrees(-90))
                 }
+                Image(nsImage: codexIcon(size: 20))
                 if usage.expanded && usage.activity.working && row.id == usage.headline?.id {
                     QuotaOrbit()
-                } else {
-                    Image(nsImage: codexIcon(size: 20))
                 }
             }
             .frame(width: 42, height: 42)
@@ -221,14 +244,16 @@ struct Dashboard: View {
 private struct QuotaOrbit: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private static let frames = (0..<orbitFrameCount).map { orbitIcon(frame: $0) }
-
     var body: some View {
         TimelineView(.animation(paused: reduceMotion)) { context in
-            let frame = reduceMotion ? 0 : orbitFrame(at: context.date.timeIntervalSinceReferenceDate)
-            Image(nsImage: Self.frames[frame])
-                .renderingMode(.template)
-                .foregroundStyle(.primary)
+            let phase = reduceMotion ? 0 : context.date.timeIntervalSinceReferenceDate
+                .truncatingRemainder(dividingBy: 1.5) / 1.5
+            Circle()
+                .fill(.white)
+                .frame(width: 6, height: 6)
+                .shadow(color: .green.opacity(0.8), radius: 3)
+                .offset(y: -19)
+                .rotationEffect(.degrees(phase * 360))
         }
     }
 }
@@ -389,7 +414,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if previous.working != value.working || previous.signal != value.signal {
             refreshStatusPresentation()
         }
-        if usage.expanded && (previous.working != value.working || previous.workingChatTitles != value.workingChatTitles) {
+        if usage.expanded && (previous.working != value.working || previous.workingChats != value.workingChats) {
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.usage.expanded else { return }
                 self.positionPanel()

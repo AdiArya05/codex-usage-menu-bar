@@ -25,7 +25,7 @@ final class CloudActivity {
     }
 
     private var pending: Set<String> = []
-    private var pendingTitles: [String] = []
+    private var pendingChats: [WorkingChat] = []
     private var lastSuccess: Date?
     private var nextPoll = Date.distantPast
     private var process: Process?
@@ -36,7 +36,7 @@ final class CloudActivity {
         return !pending.isEmpty
     }
 
-    var workingTitles: [String] { working ? pendingTitles : [] }
+    var workingChats: [WorkingChat] { working ? pendingChats : [] }
 
     var outcome: CodexSignal? {
         guard let lastOutcome, lastOutcome.expires > Date() else { return nil }
@@ -97,7 +97,7 @@ final class CloudActivity {
         }
         let pendingTasks = page.tasks.filter { $0.status == "pending" }
         pending = Set(pendingTasks.map(\.id))
-        pendingTitles = pendingTasks.compactMap(\.title)
+        pendingChats = pendingTasks.map { WorkingChat(id: "cloud:\($0.id)", title: $0.title) }
         lastSuccess = now
         nextPoll = now.addingTimeInterval(pending.isEmpty ? 20 : 5)
     }
