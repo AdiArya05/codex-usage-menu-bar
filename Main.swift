@@ -131,19 +131,21 @@ struct Dashboard: View {
                 Text("Codex task").font(.system(size: 16, weight: .semibold))
             }
             ForEach(chats.prefix(3)) { chat in
-                VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
                     Text(chat.title)
-                        .font(.system(size: 16, weight: .semibold))
+                        .fontWeight(.semibold)
                         .lineLimit(1)
                         .help(chat.title)
+                    Spacer(minLength: 0)
                     if let directory = chat.directory {
                         Label(URL(fileURLWithPath: directory).lastPathComponent, systemImage: "folder")
-                            .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
+                            .frame(maxWidth: 135, alignment: .trailing)
                             .help(directory)
                     }
                 }
+                .font(.system(size: 16))
             }
             if chats.count > 3 {
                 Text("+\(chats.count - 3) more")
