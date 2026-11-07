@@ -167,6 +167,9 @@ struct Dashboard: View {
                         .rotationEffect(.degrees(-90))
                 }
                 Image(nsImage: codexIcon(size: 20))
+                if usage.expanded && usage.taskRunning && row.id == usage.headline?.id {
+                    QuotaOrbit()
+                }
             }
             .frame(width: 42, height: 42)
             .accessibilityHidden(true)
@@ -196,6 +199,23 @@ struct Dashboard: View {
         .help(row.window.reset.map {
             "Resets \($0.formatted(date: .abbreviated, time: .shortened))"
         } ?? row.window.label)
+    }
+}
+
+private struct QuotaOrbit: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineView(.animation(paused: reduceMotion)) { context in
+            let phase = reduceMotion ? 0 : context.date.timeIntervalSinceReferenceDate
+                .truncatingRemainder(dividingBy: 1.5) / 1.5
+            Circle()
+                .fill(.white)
+                .frame(width: 6, height: 6)
+                .shadow(color: .green.opacity(0.8), radius: 3)
+                .offset(y: -19)
+                .rotationEffect(.degrees(phase * 360))
+        }
     }
 }
 
@@ -311,6 +331,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         anchor = window.convertToScreen(button.convert(button.bounds, to: nil))
         screenFrame = screen.visibleFrame
         usage.expanded = true
+        refreshStatusPresentation()
         positionPanel()
         panel.makeKeyAndOrderFront(nil)
         usage.refresh()
@@ -341,6 +362,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard usage.expanded else { return }
         usage.expanded = false
         panel.orderOut(nil)
+        refreshStatusPresentation()
         if let localMonitor { NSEvent.removeMonitor(localMonitor) }
         if let outsideMonitor { NSEvent.removeMonitor(outsideMonitor) }
         localMonitor = nil
@@ -350,6 +372,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setActivity(_ value: CodexActivity) {
         guard activity != value else { return }
         activity = value
+        if usage.taskRunning != value.working { usage.taskRunning = value.working }
+        refreshStatusPresentation()
+    }
+
+    private func refreshStatusPresentation() {
         lastStatus = nil
         updateStatus()
         updateAnimation()
@@ -359,7 +386,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard frames.count > 1, let button = item.button else {
             animation?.invalidate()
             animation = nil
-            orbitStartedAt = nil
+            if !activity.working { orbitStartedAt = nil }
             frameIndex = 0
             return
         }
@@ -387,10 +414,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let value = usage.headline.map { "\($0.window.remaining)%" } ?? "—"
         guard value != lastStatus else { return }
         lastStatus = value
-        let frameCount = activity.working && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? orbitFrameCount : 1
+        let showOrbit = activity.working && !usage.expanded
+        let animateOrbit = showOrbit && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let frameCount = animateOrbit ? orbitFrameCount : 1
         let badgeWidth: CGFloat = activity.signal == nil ? 0 : 11
         frames = (0..<frameCount).map { frame in
-            let icon = activity.working ? orbitIcon(frame: frame) : statusIcon
+            let icon = showOrbit ? orbitIcon(frame: frame) : statusIcon
             return statusImage(icon: icon, value: value, leading: badgeWidth)
         }
         frameIndex %= frames.count

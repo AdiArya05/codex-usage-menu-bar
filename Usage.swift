@@ -74,7 +74,8 @@ final class Usage: ObservableObject {
     @Published private(set) var syncing = false
 
     var onChange: (() -> Void)?
-    var expanded = false
+    @Published var expanded = false
+    @Published var taskRunning = false
     private var buckets: [String: Bucket] = [:]
     private var process: Process?
     private var input: FileHandle?
