@@ -1,5 +1,6 @@
 import AppKit
 import CoreText
+import QuartzCore
 import SwiftUI
 
 @MainActor
@@ -37,11 +38,13 @@ private func codexIcon(size: CGFloat) -> NSImage {
     return image
 }
 
+private let orbitFrameCount = 120
+
 @MainActor
 private func orbitIcon(frame: Int) -> NSImage {
     NSImage(size: NSSize(width: 16, height: 16), flipped: false) { bounds in
         for index in 0..<3 {
-            let phase = 2 * Double.pi * (Double(frame) / 18 + Double(index) / 3)
+            let phase = 2 * Double.pi * (Double(frame) / Double(orbitFrameCount) + Double(index) / 3)
             let x = bounds.midX + CGFloat(cos(phase)) * 5.4
             let y = bounds.midY + CGFloat(sin(phase)) * 5.4
             let radius = 1.6 - CGFloat(index) * 0.2
@@ -227,7 +230,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let statusIcon = codexIcon(size: 16)
     private var lastStatus: String?
     private var activity = CodexActivity.idle
-    private var animation: Timer?
+    private var animation: CADisplayLink?
+    private var orbitStartedAt: CFTimeInterval?
     private var frames: [NSImage] = []
     private var frameIndex = 0
     private var attentionDot: NSView?
@@ -346,22 +350,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setActivity(_ value: CodexActivity) {
         guard activity != value else { return }
         activity = value
-        animation?.invalidate()
-        animation = nil
-        frameIndex = 0
         lastStatus = nil
         updateStatus()
+        updateAnimation()
+    }
 
-        guard value.working, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
-        let timer = Timer(timeInterval: 1.0 / 18, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, self.frames.count > 1 else { return }
-                self.frameIndex = (self.frameIndex + 1) % self.frames.count
-                self.item.button?.image = self.frames[self.frameIndex]
-            }
+    private func updateAnimation() {
+        guard frames.count > 1, let button = item.button else {
+            animation?.invalidate()
+            animation = nil
+            orbitStartedAt = nil
+            frameIndex = 0
+            return
         }
-        animation = timer
-        RunLoop.main.add(timer, forMode: .common)
+        guard animation == nil else { return }
+
+        let link = button.displayLink(target: self, selector: #selector(advanceOrbit(_:)))
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
+        animation = link
+        link.add(to: .main, forMode: .common)
+    }
+
+    @objc private func advanceOrbit(_ link: CADisplayLink) {
+        let timestamp = link.targetTimestamp
+        let start = orbitStartedAt ?? timestamp
+        orbitStartedAt = start
+        let phase = (timestamp - start).truncatingRemainder(dividingBy: 1)
+        let index = Int((phase * Double(orbitFrameCount)).rounded()) % orbitFrameCount
+        guard index != frameIndex, frames.indices.contains(index) else { return }
+        frameIndex = index
+        item.button?.image = frames[index]
     }
 
     private func updateStatus() {
@@ -369,7 +387,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let value = usage.headline.map { "\($0.window.remaining)%" } ?? "—"
         guard value != lastStatus else { return }
         lastStatus = value
-        let frameCount = activity.working && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 18 : 1
+        let frameCount = activity.working && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? orbitFrameCount : 1
         let badgeWidth: CGFloat = activity.signal == nil ? 0 : 11
         frames = (0..<frameCount).map { frame in
             let icon = activity.working ? orbitIcon(frame: frame) : statusIcon
@@ -430,6 +448,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return true
         }
         image.isTemplate = true
+        image.cacheMode = .always
         return image
     }
 }
