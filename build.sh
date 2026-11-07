@@ -8,7 +8,7 @@ trap 'rm -rf "$build"' EXIT
 bundle="$build/Codex Usage.app"
 mkdir -p "$bundle/Contents/MacOS"
 swiftc -O -swift-version 5 -target "$(uname -m)-apple-macosx14.0" \
-    Main.swift Usage.swift -o "$bundle/Contents/MacOS/CodexUsage"
+    Main.swift Usage.swift Activity.swift -o "$bundle/Contents/MacOS/CodexUsage"
 cat > "$bundle/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

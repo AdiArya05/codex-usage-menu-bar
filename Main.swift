@@ -3,7 +3,7 @@ import CoreText
 import SwiftUI
 
 @MainActor
-private func codexIcon(size: CGFloat) -> NSImage {
+private func codexIcon(size: CGFloat, activity: CodexActivity = .idle, frame: Int = 0) -> NSImage {
     let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { _ in
         let outline = NSBezierPath()
         let scale = size / 16
@@ -16,19 +16,35 @@ private func codexIcon(size: CGFloat) -> NSImage {
         outline.curve(to: point(6.7, 2.8), controlPoint1: point(11.1, 1), controlPoint2: point(8.3, 1.1))
         outline.curve(to: point(3.2, 5.6), controlPoint1: point(4.5, 2.3), controlPoint2: point(2.8, 3.7))
         outline.close()
-        outline.move(to: point(5.2, 10.3))
-        outline.line(to: point(7, 8.3))
-        outline.line(to: point(5.2, 6.4))
-        outline.move(to: point(8.6, 6.4))
-        outline.line(to: point(11, 6.4))
         let ink = outline.bounds
-        outline.transform(using: AffineTransform(translationByX: size / 2 - ink.midX,
-                                                 byY: size / 2 - ink.midY))
+        let center = AffineTransform(translationByX: size / 2 - ink.midX,
+                                     byY: size / 2 - ink.midY)
         NSColor.black.setStroke()
         outline.lineWidth = 1.25 * scale
         outline.lineCapStyle = .round
         outline.lineJoinStyle = .round
+
+        if activity == .idle {
+            outline.move(to: point(5.2, 10.3))
+            outline.line(to: point(7, 8.3))
+            outline.line(to: point(5.2, 6.4))
+            outline.move(to: point(8.6, 6.4))
+            outline.line(to: point(11, 6.4))
+        }
+        outline.transform(using: center)
         outline.stroke()
+
+        if activity == .working {
+            for index in 0..<3 {
+                let phase = Double(frame - index * 3) * 2 * .pi / 12
+                let y = size / 2 + CGFloat(sin(phase)) * 1.25 * scale
+                let x = size / 2 + CGFloat(index - 1) * 3.1 * scale
+                let radius = 0.85 * scale
+                NSColor.black.withAlphaComponent(0.67 + 0.33 * cos(phase)).setFill()
+                NSBezierPath(ovalIn: NSRect(x: x - radius, y: y - radius,
+                                            width: 2 * radius, height: 2 * radius)).fill()
+            }
+        }
         return true
     }
     image.isTemplate = true
@@ -192,6 +208,10 @@ private struct GlassSurface: ViewModifier {
     }
 }
 
+private final class ActivityDot: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 private final class PriorityPanel: NSPanel {
     override var canBecomeKey: Bool { true }
 }
@@ -204,6 +224,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var panel = makePanel()
     private let statusIcon = codexIcon(size: 16)
     private var lastStatus: String?
+    private var activity = CodexActivity.idle
+    private var animation: Timer?
+    private var frames: [NSImage] = []
+    private var frameIndex = 0
+    private var attentionDot: NSView?
+    private lazy var activityMonitor = ActivityMonitor { [weak self] in self?.setActivity($0) }
     private var localMonitor: Any?
     private var outsideMonitor: Any?
     private var anchor: NSRect?
@@ -219,6 +245,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         updateStatus()
         usage.start()
+        activityMonitor.start()
         NSWorkspace.shared.notificationCenter.addObserver(
             self, selector: #selector(wake), name: NSWorkspace.didWakeNotification, object: nil
         )
@@ -226,6 +253,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         if usage.expanded { dismiss() }
+        animation?.invalidate()
+        activityMonitor.stop()
         usage.stop()
     }
 
@@ -312,16 +341,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         outsideMonitor = nil
     }
 
+    private func setActivity(_ value: CodexActivity) {
+        guard activity != value else { return }
+        activity = value
+        animation?.invalidate()
+        animation = nil
+        frameIndex = 0
+        lastStatus = nil
+        updateStatus()
+
+        guard value == .working, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let timer = Timer(timeInterval: 1.0 / 12, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.frames.count > 1 else { return }
+                self.frameIndex = (self.frameIndex + 1) % self.frames.count
+                self.item.button?.image = self.frames[self.frameIndex]
+            }
+        }
+        animation = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
     private func updateStatus() {
         guard let button = item.button else { return }
         let value = usage.headline.map { "\($0.window.remaining)%" } ?? "—"
         guard value != lastStatus else { return }
         lastStatus = value
+        let frameCount = activity == .working && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 12 : 1
+        frames = (0..<frameCount).map { frame in
+            let icon = activity == .idle ? statusIcon : codexIcon(size: 16, activity: activity, frame: frame)
+            return statusImage(icon: icon, value: value)
+        }
+        frameIndex %= frames.count
+        let image = frames[frameIndex]
+        button.image = image
+        attentionDot?.removeFromSuperview()
+        attentionDot = nil
+        if activity == .needsInput {
+            let dot = ActivityDot()
+            dot.translatesAutoresizingMaskIntoConstraints = false
+            dot.wantsLayer = true
+            dot.layer?.backgroundColor = NSColor.systemOrange.cgColor
+            dot.layer?.cornerRadius = 2.5
+            button.addSubview(dot)
+            NSLayoutConstraint.activate([
+                dot.widthAnchor.constraint(equalToConstant: 5),
+                dot.heightAnchor.constraint(equalToConstant: 5),
+                dot.centerXAnchor.constraint(equalTo: button.centerXAnchor, constant: (16 - image.size.width) / 2),
+                dot.centerYAnchor.constraint(equalTo: button.centerYAnchor)
+            ])
+            attentionDot = dot
+        }
+        let description = "Codex usage, \(value) left · \(activity.rawValue)"
+        button.setAccessibilityLabel(description)
+        button.toolTip = description
+    }
+
+    private func statusImage(icon: NSImage, value: String) -> NSImage {
         let label = NSAttributedString(string: value, attributes: [
             .font: NSFont.monospacedDigitSystemFont(ofSize: 14, weight: .medium),
             .foregroundColor: NSColor.black
         ])
-        let icon = statusIcon
         let gap: CGFloat = 8
         let line = CTLineCreateWithAttributedString(label)
         let ink = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
@@ -341,10 +421,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return true
         }
         image.isTemplate = true
-        button.image = image
-        let description = "Codex usage, \(value) left"
-        button.setAccessibilityLabel(description)
-        button.toolTip = description
+        return image
     }
 }
 
