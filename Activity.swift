@@ -239,10 +239,16 @@ final class ActivityMonitor {
             let length = buffer.prefix(4).enumerated().reduce(0) {
                 $0 | (Int($1.element) << (8 * $1.offset))
             }
-            // Large history snapshots are irrelevant to the activity indicator.
             if length > 16 * 1024 * 1024 {
+                // Codex sends the runtime status near the front of a paginated
+                // snapshot. Read that metadata and drain the history in chunks.
+                let prefixLimit = 64 * 1024
+                guard buffer.count >= 4 + prefixLimit else { return }
+                let prefix = buffer.dropFirst(4).prefix(prefixLimit)
+                let snapshot = readSnapshotStatus(prefix)
                 buffer.removeFirst(4)
                 skipBytes = length
+                if let snapshot { handle(snapshot) }
                 continue
             }
             guard buffer.count >= 4 + length else { return }
@@ -252,6 +258,25 @@ final class ActivityMonitor {
                 handle(value)
             }
         }
+    }
+
+    private func readSnapshotStatus(_ prefix: Data) -> [String: Any]? {
+        let key = Data(#","threadRuntimeStatus":{"#.utf8)
+        guard let field = prefix.range(of: key),
+              let end = prefix[field.upperBound...].firstIndex(of: UInt8(ascii: "}")) else { return nil }
+
+        // Close conversationState, change, params and the envelope. Parsing the
+        // truncated object also verifies the field was at the expected depth.
+        var metadata = Data(prefix[...end])
+        metadata.append(contentsOf: "}}}}".utf8)
+        guard let message = (try? JSONSerialization.jsonObject(with: metadata)) as? [String: Any],
+              message["method"] as? String == "thread-stream-state-changed",
+              let params = message["params"] as? [String: Any],
+              let change = params["change"] as? [String: Any],
+              change["type"] as? String == "snapshot",
+              let state = change["conversationState"] as? [String: Any],
+              state["threadRuntimeStatus"] is [String: Any] else { return nil }
+        return message
     }
 
     private func handle(_ value: [String: Any]) {
