@@ -2,10 +2,21 @@ import Foundation
 import Network
 import SQLite3
 
-enum CodexActivity: String {
-    case idle = "Idle"
-    case working = "Working"
+enum CodexSignal: String {
     case needsInput = "Needs your input"
+    case finished = "Finished"
+    case failed = "Turn failed"
+}
+
+struct CodexActivity: Equatable {
+    let working: Bool
+    let signal: CodexSignal?
+
+    static let idle = CodexActivity(working: false, signal: nil)
+
+    var label: String {
+        signal?.rawValue ?? (working ? "Working" : "Idle")
+    }
 }
 
 // The desktop's local follower stream supplies live status. The history index
@@ -21,6 +32,8 @@ final class ActivityMonitor {
     private let home: URL
     private let questions: PendingQuestions
     private var hasPendingQuestions = false
+    private let startedAt = Date()
+    private var recentOutcome: CodexSignal?
     private let onChange: (CodexActivity) -> Void
     private let queue = DispatchQueue(label: "CodexUsage.Activity", qos: .utility)
     private var timer: DispatchSourceTimer?
@@ -59,10 +72,9 @@ final class ActivityMonitor {
     }
 
     private func poll() {
-        if let pending = questions.poll(), pending != hasPendingQuestions {
-            hasPendingQuestions = pending
-            publishActivity()
-        }
+        if let pending = questions.poll() { hasPendingQuestions = pending }
+        recentOutcome = readRecentOutcome()
+        defer { publishActivity() }
         guard connection != nil else {
             let socket = home.appendingPathComponent("ipc/ipc.sock").path
             guard FileManager.default.fileExists(atPath: socket) else { return }
@@ -81,7 +93,30 @@ final class ActivityMonitor {
             followed[thread] = FollowedTurn(turnID: turn, requestedAt: Date())
             sendFollowing(thread, true)
         }
-        publishActivity()
+    }
+
+    private func readRecentOutcome() -> CodexSignal? {
+        let path = home.appendingPathComponent("thread_history_1.sqlite").path
+        var database: OpaquePointer?
+        let result = sqlite3_open_v2(path, &database, SQLITE_OPEN_READONLY, nil)
+        defer { sqlite3_close(database) }
+        guard result == SQLITE_OK else { return nil }
+
+        let query = """
+            SELECT status FROM thread_turns
+            WHERE (status = 'completed' AND completed_at >= ?)
+               OR (status = 'failed' AND completed_at >= ?)
+            ORDER BY (status = 'failed') DESC, completed_at DESC LIMIT 1
+            """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, query, -1, &statement, nil) == SQLITE_OK else { return nil }
+        defer { sqlite3_finalize(statement) }
+        let now = Date()
+        let firstNewTurn = ceil(startedAt.timeIntervalSince1970)
+        sqlite3_bind_double(statement, 1, max(firstNewTurn, now.timeIntervalSince1970 - 6))
+        sqlite3_bind_double(statement, 2, max(firstNewTurn, now.timeIntervalSince1970 - 12))
+        guard sqlite3_step(statement) == SQLITE_ROW, let status = sqlite3_column_text(statement, 0) else { return nil }
+        return String(cString: status) == "failed" ? .failed : .finished
     }
 
     private func activeTurns() -> [String: String]? {
@@ -279,11 +314,13 @@ final class ActivityMonitor {
 
     private func publishActivity() {
         let active = followed.values.filter { $0.status["type"] as? String == "active" }
-        let waiting = hasPendingQuestions || active.contains {
+        let waitingTurns = active.filter {
             let flags = $0.status["activeFlags"] as? [String] ?? []
             return flags.contains("waitingOnApproval") || flags.contains("waitingOnUserInput")
         }
-        let next: CodexActivity = waiting ? .needsInput : active.isEmpty ? .idle : .working
+        let waiting = hasPendingQuestions || !waitingTurns.isEmpty
+        let next = CodexActivity(working: active.count > waitingTurns.count,
+                                 signal: waiting ? .needsInput : recentOutcome)
         guard next != activity else { return }
         activity = next
         DispatchQueue.main.async { [onChange] in onChange(next) }

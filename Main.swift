@@ -3,7 +3,7 @@ import CoreText
 import SwiftUI
 
 @MainActor
-private func codexIcon(size: CGFloat, activity: CodexActivity = .idle, frame: Int = 0) -> NSImage {
+private func codexIcon(size: CGFloat) -> NSImage {
     let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { _ in
         let outline = NSBezierPath()
         let scale = size / 16
@@ -24,31 +24,33 @@ private func codexIcon(size: CGFloat, activity: CodexActivity = .idle, frame: In
         outline.lineCapStyle = .round
         outline.lineJoinStyle = .round
 
-        if activity == .idle {
-            outline.move(to: point(5.2, 10.3))
-            outline.line(to: point(7, 8.3))
-            outline.line(to: point(5.2, 6.4))
-            outline.move(to: point(8.6, 6.4))
-            outline.line(to: point(11, 6.4))
-        }
+        outline.move(to: point(5.2, 10.3))
+        outline.line(to: point(7, 8.3))
+        outline.line(to: point(5.2, 6.4))
+        outline.move(to: point(8.6, 6.4))
+        outline.line(to: point(11, 6.4))
         outline.transform(using: center)
         outline.stroke()
-
-        if activity == .working {
-            for index in 0..<3 {
-                let phase = Double(frame - index * 3) * 2 * .pi / 12
-                let y = size / 2 + CGFloat(sin(phase)) * 1.8 * scale
-                let x = size / 2 + CGFloat(index - 1) * 3.1 * scale
-                let radius = 1.05 * scale
-                NSColor.black.withAlphaComponent(0.76 + 0.24 * cos(phase)).setFill()
-                NSBezierPath(ovalIn: NSRect(x: x - radius, y: y - radius,
-                                            width: 2 * radius, height: 2 * radius)).fill()
-            }
-        }
         return true
     }
     image.isTemplate = true
     return image
+}
+
+@MainActor
+private func orbitIcon(frame: Int) -> NSImage {
+    NSImage(size: NSSize(width: 16, height: 16), flipped: false) { bounds in
+        for index in 0..<3 {
+            let phase = 2 * Double.pi * (Double(frame) / 18 + Double(index) / 3)
+            let x = bounds.midX + CGFloat(cos(phase)) * 5.4
+            let y = bounds.midY + CGFloat(sin(phase)) * 5.4
+            let radius = 1.6 - CGFloat(index) * 0.2
+            NSColor.black.withAlphaComponent(1 - CGFloat(index) * 0.15).setFill()
+            NSBezierPath(ovalIn: NSRect(x: x - radius, y: y - radius,
+                                        width: 2 * radius, height: 2 * radius)).fill()
+        }
+        return true
+    }
 }
 
 struct Dashboard: View {
@@ -350,8 +352,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         lastStatus = nil
         updateStatus()
 
-        guard value == .working, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
-        let timer = Timer(timeInterval: 1.0 / 12, repeats: true) { [weak self] _ in
+        guard value.working, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let timer = Timer(timeInterval: 1.0 / 18, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, self.frames.count > 1 else { return }
                 self.frameIndex = (self.frameIndex + 1) % self.frames.count
@@ -367,37 +369,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let value = usage.headline.map { "\($0.window.remaining)%" } ?? "—"
         guard value != lastStatus else { return }
         lastStatus = value
-        let frameCount = activity == .working && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 12 : 1
+        let frameCount = activity.working && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 18 : 1
+        let badgeWidth: CGFloat = activity.signal == nil ? 0 : 11
         frames = (0..<frameCount).map { frame in
-            let icon = activity == .idle ? statusIcon : codexIcon(size: 16, activity: activity, frame: frame)
-            return statusImage(icon: icon, value: value)
+            let icon = activity.working ? orbitIcon(frame: frame) : statusIcon
+            return statusImage(icon: icon, value: value, leading: badgeWidth)
         }
         frameIndex %= frames.count
         let image = frames[frameIndex]
         button.image = image
         attentionDot?.removeFromSuperview()
         attentionDot = nil
-        if activity == .needsInput {
+        if let signal = activity.signal {
+            let color: NSColor
+            switch signal {
+            case .needsInput: color = .systemYellow
+            case .finished: color = .systemGreen
+            case .failed: color = .systemRed
+            }
             let dot = ActivityDot()
             dot.translatesAutoresizingMaskIntoConstraints = false
             dot.wantsLayer = true
-            dot.layer?.backgroundColor = NSColor.systemOrange.cgColor
+            dot.layer?.backgroundColor = color.cgColor
             dot.layer?.cornerRadius = 3
             button.addSubview(dot)
             NSLayoutConstraint.activate([
                 dot.widthAnchor.constraint(equalToConstant: 6),
                 dot.heightAnchor.constraint(equalToConstant: 6),
-                dot.centerXAnchor.constraint(equalTo: button.centerXAnchor, constant: (16 - image.size.width) / 2),
+                dot.centerXAnchor.constraint(equalTo: button.centerXAnchor, constant: (6 - image.size.width) / 2),
                 dot.centerYAnchor.constraint(equalTo: button.centerYAnchor)
             ])
             attentionDot = dot
         }
-        let description = "Codex usage, \(value) left · \(activity.rawValue)"
+        let description = "Codex usage, \(value) left · \(activity.label)"
         button.setAccessibilityLabel(description)
         button.toolTip = description
     }
 
-    private func statusImage(icon: NSImage, value: String) -> NSImage {
+    private func statusImage(icon: NSImage, value: String, leading: CGFloat) -> NSImage {
         let label = NSAttributedString(string: value, attributes: [
             .font: NSFont.monospacedDigitSystemFont(ofSize: 14, weight: .medium),
             .foregroundColor: NSColor.black
@@ -406,15 +415,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let line = CTLineCreateWithAttributedString(label)
         let ink = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
         let labelWidth = ceil(label.size().width)
-        let image = NSImage(size: NSSize(width: icon.size.width + gap + labelWidth,
+        let image = NSImage(size: NSSize(width: leading + icon.size.width + gap + labelWidth,
                                         height: 18), flipped: false) { bounds in
             guard let context = NSGraphicsContext.current?.cgContext else { return false }
-            icon.draw(at: NSPoint(x: 0, y: (bounds.height - icon.size.height) / 2),
+            icon.draw(at: NSPoint(x: leading, y: (bounds.height - icon.size.height) / 2),
                       from: .zero, operation: .sourceOver, fraction: 1)
             // Center the visible glyphs, independent of the font's line spacing.
             context.saveGState()
             context.textMatrix = .identity
-            context.textPosition = CGPoint(x: icon.size.width + gap + labelWidth / 2 - ink.midX,
+            context.textPosition = CGPoint(x: leading + icon.size.width + gap + labelWidth / 2 - ink.midX,
                                            y: bounds.midY - ink.midY)
             CTLineDraw(line, context)
             context.restoreGState()

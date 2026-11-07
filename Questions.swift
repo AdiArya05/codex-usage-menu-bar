@@ -10,7 +10,7 @@ final class PendingQuestions {
 
     private let home: URL
     private var cursor: Int64 = 0
-    private var pending: [String: Set<Question>] = [:]
+    private var pending: [String: [Question: String]] = [:]
 
     init(home: URL) {
         self.home = home
@@ -34,10 +34,10 @@ final class PendingQuestions {
             cursor = 0
             pending.removeAll()
         }
-        guard end > cursor else { return hasUnarchivedQuestions() }
+        guard end > cursor else { return hasCurrentQuestions(in: database) }
 
         let query = """
-            SELECT rowid, thread_id, item_type, item_id,
+            SELECT rowid, thread_id, item_type, item_id, turn_id,
                    CASE WHEN item_type = 'agentMessage' THEN json_array_length(item_json, '$.questions') END,
                    CASE WHEN item_type = 'userMessage' AND item_json LIKE '%<send_user_message_question_reply>%'
                         THEN item_json END
@@ -61,13 +61,17 @@ final class PendingQuestions {
                   let thread = sqlite3_column_text(statement, 1),
                   let type = sqlite3_column_text(statement, 2) else { return nil }
             let threadID = String(cString: thread)
-            if String(cString: type) == "agentMessage", let item = sqlite3_column_text(statement, 3) {
+            if String(cString: type) == "agentMessage",
+               let item = sqlite3_column_text(statement, 3), let turn = sqlite3_column_text(statement, 4) {
                 let messageID = String(cString: item)
-                let count = Int(sqlite3_column_int(statement, 4))
-                pending[threadID, default: []].formUnion((0..<count).map { Question(messageID: messageID, index: $0) })
+                let turnID = String(cString: turn)
+                let count = Int(sqlite3_column_int(statement, 5))
+                for index in 0..<count {
+                    pending[threadID, default: [:]][Question(messageID: messageID, index: index)] = turnID
+                }
             } else if pending[threadID] != nil {
-                if let raw = sqlite3_column_text(statement, 5), let answers = replies(in: String(cString: raw)) {
-                    pending[threadID]?.subtract(answers)
+                if let raw = sqlite3_column_text(statement, 6), let answers = replies(in: String(cString: raw)) {
+                    for answer in answers { pending[threadID]?.removeValue(forKey: answer) }
                     if pending[threadID]?.isEmpty == true { pending.removeValue(forKey: threadID) }
                 } else {
                     // A new ordinary prompt moves the chat past its old questions.
@@ -77,7 +81,7 @@ final class PendingQuestions {
             cursor = sqlite3_column_int64(statement, 0)
         }
         cursor = end
-        return hasUnarchivedQuestions()
+        return hasCurrentQuestions(in: database)
     }
 
     private func replies(in item: String) -> Set<Question>? {
@@ -100,7 +104,7 @@ final class PendingQuestions {
         })
     }
 
-    private func hasUnarchivedQuestions() -> Bool? {
+    private func hasCurrentQuestions(in history: OpaquePointer?) -> Bool? {
         guard !pending.isEmpty else { return false }
         var database: OpaquePointer?
         let state = home.appendingPathComponent("state_5.sqlite").path
@@ -108,11 +112,34 @@ final class PendingQuestions {
         defer { sqlite3_close(database) }
         guard result == SQLITE_OK else { return nil }
 
+        var latestTurn: OpaquePointer?
+        let latest = """
+            SELECT turn_id, status, completed_at FROM thread_turns
+            WHERE thread_id = ? ORDER BY rollout_ordinal DESC LIMIT 1
+            """
+        guard sqlite3_prepare_v2(history, latest, -1, &latestTurn, nil) == SQLITE_OK else { return nil }
+        defer { sqlite3_finalize(latestTurn) }
+
         var statement: OpaquePointer?
         let query = "SELECT 1 FROM threads WHERE id = ? AND archived = 0"
         guard sqlite3_prepare_v2(database, query, -1, &statement, nil) == SQLITE_OK else { return nil }
         defer { sqlite3_finalize(statement) }
-        for thread in pending.keys {
+        let cutoff = Date().addingTimeInterval(-10 * 60).timeIntervalSince1970
+        for (thread, questions) in pending {
+            let relevant = thread.withCString {
+                sqlite3_bind_text(latestTurn, 1, $0, -1, nil)
+                defer {
+                    sqlite3_reset(latestTurn)
+                    sqlite3_clear_bindings(latestTurn)
+                }
+                guard sqlite3_step(latestTurn) == SQLITE_ROW,
+                      let turn = sqlite3_column_text(latestTurn, 0),
+                      let status = sqlite3_column_text(latestTurn, 1),
+                      questions.values.contains(String(cString: turn)) else { return false }
+                let state = String(cString: status)
+                return state == "inProgress" || (state == "completed" && sqlite3_column_double(latestTurn, 2) >= cutoff)
+            }
+            guard relevant else { continue }
             let result = thread.withCString {
                 sqlite3_bind_text(statement, 1, $0, -1, nil)
                 let result = sqlite3_step(statement)
