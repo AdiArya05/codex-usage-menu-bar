@@ -40,6 +40,11 @@ private func codexIcon(size: CGFloat) -> NSImage {
 
 private let orbitFrameCount = 120
 
+private func orbitFrame(at elapsed: TimeInterval) -> Int {
+    let phase = elapsed.truncatingRemainder(dividingBy: 1)
+    return Int((phase * Double(orbitFrameCount)).rounded()) % orbitFrameCount
+}
+
 @MainActor
 private func orbitIcon(frame: Int) -> NSImage {
     NSImage(size: NSSize(width: 16, height: 16), flipped: false) { bounds in
@@ -81,6 +86,16 @@ struct Dashboard: View {
                     section("Usage")
                     VStack(spacing: 12) {
                         ForEach(priorityRows) { quota($0) }
+                    }
+                }
+                if usage.activity.working {
+                    let titles = usage.activity.workingChatTitles.joined(separator: " · ")
+                    VStack(alignment: .leading, spacing: 4) {
+                        section("Working on")
+                        Text(titles.isEmpty ? "Codex task" : titles)
+                            .font(.subheadline)
+                            .lineLimit(2)
+                            .help(titles)
                     }
                 }
                 Divider()
@@ -166,9 +181,10 @@ struct Dashboard: View {
                         .stroke(.green, style: StrokeStyle(lineWidth: 4, lineCap: .round))
                         .rotationEffect(.degrees(-90))
                 }
-                Image(nsImage: codexIcon(size: 20))
-                if usage.expanded && usage.taskRunning && row.id == usage.headline?.id {
+                if usage.expanded && usage.activity.working && row.id == usage.headline?.id {
                     QuotaOrbit()
+                } else {
+                    Image(nsImage: codexIcon(size: 20))
                 }
             }
             .frame(width: 42, height: 42)
@@ -205,16 +221,14 @@ struct Dashboard: View {
 private struct QuotaOrbit: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    private static let frames = (0..<orbitFrameCount).map { orbitIcon(frame: $0) }
+
     var body: some View {
         TimelineView(.animation(paused: reduceMotion)) { context in
-            let phase = reduceMotion ? 0 : context.date.timeIntervalSinceReferenceDate
-                .truncatingRemainder(dividingBy: 1.5) / 1.5
-            Circle()
-                .fill(.white)
-                .frame(width: 6, height: 6)
-                .shadow(color: .green.opacity(0.8), radius: 3)
-                .offset(y: -19)
-                .rotationEffect(.degrees(phase * 360))
+            let frame = reduceMotion ? 0 : orbitFrame(at: context.date.timeIntervalSinceReferenceDate)
+            Image(nsImage: Self.frames[frame])
+                .renderingMode(.template)
+                .foregroundStyle(.primary)
         }
     }
 }
@@ -249,7 +263,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var panel = makePanel()
     private let statusIcon = codexIcon(size: 16)
     private var lastStatus: String?
-    private var activity = CodexActivity.idle
     private var animation: CADisplayLink?
     private var orbitStartedAt: CFTimeInterval?
     private var frames: [NSImage] = []
@@ -370,10 +383,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func setActivity(_ value: CodexActivity) {
-        guard activity != value else { return }
-        activity = value
-        if usage.taskRunning != value.working { usage.taskRunning = value.working }
-        refreshStatusPresentation()
+        let previous = usage.activity
+        guard previous != value else { return }
+        usage.activity = value
+        if previous.working != value.working || previous.signal != value.signal {
+            refreshStatusPresentation()
+        }
+        if usage.expanded && (previous.working != value.working || previous.workingChatTitles != value.workingChatTitles) {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.usage.expanded else { return }
+                self.positionPanel()
+            }
+        }
     }
 
     private func refreshStatusPresentation() {
@@ -386,7 +407,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard frames.count > 1, let button = item.button else {
             animation?.invalidate()
             animation = nil
-            if !activity.working { orbitStartedAt = nil }
+            if !usage.activity.working { orbitStartedAt = nil }
             frameIndex = 0
             return
         }
@@ -402,8 +423,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let timestamp = link.targetTimestamp
         let start = orbitStartedAt ?? timestamp
         orbitStartedAt = start
-        let phase = (timestamp - start).truncatingRemainder(dividingBy: 1)
-        let index = Int((phase * Double(orbitFrameCount)).rounded()) % orbitFrameCount
+        let index = orbitFrame(at: timestamp - start)
         guard index != frameIndex, frames.indices.contains(index) else { return }
         frameIndex = index
         item.button?.image = frames[index]
@@ -414,6 +434,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let value = usage.headline.map { "\($0.window.remaining)%" } ?? "—"
         guard value != lastStatus else { return }
         lastStatus = value
+        let activity = usage.activity
         let showOrbit = activity.working && !usage.expanded
         let animateOrbit = showOrbit && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         let frameCount = animateOrbit ? orbitFrameCount : 1

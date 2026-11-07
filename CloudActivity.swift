@@ -18,12 +18,14 @@ final class CloudActivity {
         struct Task: Decodable {
             let id: String
             let status: String
+            let title: String?
         }
 
         let tasks: [Task]
     }
 
     private var pending: Set<String> = []
+    private var pendingTitles: [String] = []
     private var lastSuccess: Date?
     private var nextPoll = Date.distantPast
     private var process: Process?
@@ -33,6 +35,8 @@ final class CloudActivity {
         guard let lastSuccess, Date().timeIntervalSince(lastSuccess) < 45 else { return false }
         return !pending.isEmpty
     }
+
+    var workingTitles: [String] { working ? pendingTitles : [] }
 
     var outcome: CodexSignal? {
         guard let lastOutcome, lastOutcome.expires > Date() else { return nil }
@@ -91,7 +95,9 @@ final class CloudActivity {
         } else if changed.contains(where: { $0.status == "ready" || $0.status == "applied" }) {
             lastOutcome = (.finished, now.addingTimeInterval(6))
         }
-        pending = Set(page.tasks.filter { $0.status == "pending" }.map(\.id))
+        let pendingTasks = page.tasks.filter { $0.status == "pending" }
+        pending = Set(pendingTasks.map(\.id))
+        pendingTitles = pendingTasks.compactMap(\.title)
         lastSuccess = now
         nextPoll = now.addingTimeInterval(pending.isEmpty ? 20 : 5)
     }

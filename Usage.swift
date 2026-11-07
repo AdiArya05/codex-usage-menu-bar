@@ -75,7 +75,7 @@ final class Usage: ObservableObject {
 
     var onChange: (() -> Void)?
     @Published var expanded = false
-    @Published var taskRunning = false
+    @Published var activity = CodexActivity.idle
     private var buckets: [String: Bucket] = [:]
     private var process: Process?
     private var input: FileHandle?

@@ -12,6 +12,7 @@ enum CodexSignal: String {
 struct CodexActivity: Equatable {
     let working: Bool
     let signal: CodexSignal?
+    var workingChatTitles: [String] = []
 
     static let idle = CodexActivity(working: false, signal: nil)
 
@@ -323,6 +324,8 @@ final class ActivityMonitor {
               let owner = value["sourceClientId"] as? String,
               let change = params["change"] as? [String: Any] else { return }
 
+        let previousType = subscription.status["type"] as? String
+        let previousFlags = subscription.status["activeFlags"] as? [String]
         if change["type"] as? String == "snapshot" {
             let conversation = change["conversationState"] as? [String: Any]
             subscription.status = conversation?["threadRuntimeStatus"] as? [String: Any] ?? [:]
@@ -353,24 +356,59 @@ final class ActivityMonitor {
             }
         }
         followed[thread] = subscription
-        publishActivity()
+        if previousType != subscription.status["type"] as? String
+            || previousFlags != subscription.status["activeFlags"] as? [String] {
+            publishActivity()
+        }
+    }
+
+    private func workingChatTitles(for threads: Set<String>) -> [String] {
+        guard !threads.isEmpty else { return [] }
+        var database: OpaquePointer?
+        let path = home.appendingPathComponent("state_5.sqlite").path
+        let result = sqlite3_open_v2(path, &database, SQLITE_OPEN_READONLY, nil)
+        defer { sqlite3_close(database) }
+        guard result == SQLITE_OK else { return [] }
+
+        var statement: OpaquePointer?
+        let sql = "SELECT substr(coalesce(nullif(name, ''), title), 1, 200) FROM threads WHERE id = ?"
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else { return [] }
+        defer { sqlite3_finalize(statement) }
+
+        return threads.compactMap { thread in
+            thread.withCString { id -> String? in
+                sqlite3_bind_text(statement, 1, id, -1, nil)
+                defer {
+                    sqlite3_reset(statement)
+                    sqlite3_clear_bindings(statement)
+                }
+                guard sqlite3_step(statement) == SQLITE_ROW,
+                      let title = sqlite3_column_text(statement, 0) else { return nil }
+                return String(cString: title)
+            }
+        }
     }
 
     private func publishActivity() {
-        let active = followed.values.filter { $0.status["type"] as? String == "active" }
+        let active = followed.filter { $0.value.status["type"] as? String == "active" }
         let waitingTurns = active.filter {
-            let flags = $0.status["activeFlags"] as? [String] ?? []
+            let flags = $0.value.status["activeFlags"] as? [String] ?? []
             return flags.contains("waitingOnApproval") || flags.contains("waitingOnUserInput")
         }
         let waiting = hasPendingQuestions || !waitingTurns.isEmpty
-        let hasUnobservedWork = localTurns.contains { thread, turn in
+        let unobserved = localTurns.filter { thread, turn in
             guard let subscription = followed[thread], subscription.turnID == turn else { return true }
             return subscription.status["type"] == nil
         }
+        let running = Set(active.keys).subtracting(waitingTurns.keys).union(unobserved.keys)
+        let names = workingChatTitles(for: running) + cloud.workingTitles
+        let titles = Set(names.map { $0.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
+            .filter { !$0.isEmpty }).sorted()
         let outcomes = [recentOutcome, cloud.outcome]
         let outcome: CodexSignal? = outcomes.contains(.failed) ? .failed : outcomes.compactMap { $0 }.first
-        let next = CodexActivity(working: active.count > waitingTurns.count || hasUnobservedWork || cloud.working,
-                                 signal: waiting ? .needsInput : outcome)
+        let next = CodexActivity(working: !running.isEmpty || cloud.working,
+                                 signal: waiting ? .needsInput : outcome,
+                                 workingChatTitles: titles)
         guard next != activity else { return }
         activity = next
         DispatchQueue.main.async { [onChange] in onChange(next) }
