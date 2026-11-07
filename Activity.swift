@@ -205,10 +205,10 @@ final class ActivityMonitor {
             }
             guard buffer.count >= 4 + length else { return }
             let payload = buffer.dropFirst(4).prefix(length)
+            buffer.removeFirst(4 + length)
             if let value = try? JSONSerialization.jsonObject(with: payload) as? [String: Any] {
                 handle(value)
             }
-            buffer.removeFirst(4 + length)
         }
     }
 

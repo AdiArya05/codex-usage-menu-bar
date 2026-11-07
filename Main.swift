@@ -37,10 +37,10 @@ private func codexIcon(size: CGFloat, activity: CodexActivity = .idle, frame: In
         if activity == .working {
             for index in 0..<3 {
                 let phase = Double(frame - index * 3) * 2 * .pi / 12
-                let y = size / 2 + CGFloat(sin(phase)) * 1.25 * scale
+                let y = size / 2 + CGFloat(sin(phase)) * 1.8 * scale
                 let x = size / 2 + CGFloat(index - 1) * 3.1 * scale
-                let radius = 0.85 * scale
-                NSColor.black.withAlphaComponent(0.67 + 0.33 * cos(phase)).setFill()
+                let radius = 1.05 * scale
+                NSColor.black.withAlphaComponent(0.76 + 0.24 * cos(phase)).setFill()
                 NSBezierPath(ovalIn: NSRect(x: x - radius, y: y - radius,
                                             width: 2 * radius, height: 2 * radius)).fill()
             }
@@ -382,11 +382,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             dot.translatesAutoresizingMaskIntoConstraints = false
             dot.wantsLayer = true
             dot.layer?.backgroundColor = NSColor.systemOrange.cgColor
-            dot.layer?.cornerRadius = 2.5
+            dot.layer?.cornerRadius = 3
             button.addSubview(dot)
             NSLayoutConstraint.activate([
-                dot.widthAnchor.constraint(equalToConstant: 5),
-                dot.heightAnchor.constraint(equalToConstant: 5),
+                dot.widthAnchor.constraint(equalToConstant: 6),
+                dot.heightAnchor.constraint(equalToConstant: 6),
                 dot.centerXAnchor.constraint(equalTo: button.centerXAnchor, constant: (16 - image.size.width) / 2),
                 dot.centerYAnchor.constraint(equalTo: button.centerYAnchor)
             ])
