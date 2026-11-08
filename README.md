@@ -2,6 +2,18 @@
 
 A native Mac menu bar app that shows your remaining Codex quota. Click the Codex icon for a compact panel with live usage, reset countdowns, and earned reset credits.
 
+## Install
+
+Requires macOS 14 or later on Apple Silicon or Intel and a local Codex installation signed in with your ChatGPT account. [Get Codex](https://chatgpt.com/codex)
+
+1. [Download Codex Usage for macOS](https://github.com/AdiArya05/codex-usage-menu-bar/releases/latest/download/Codex-Usage-macOS.zip).
+2. Unzip the download and drag **Codex Usage.app** into **Applications**.
+3. Open **Codex Usage** from Applications, then click its icon in the menu bar.
+
+This build has no Apple notarization. If macOS blocks the first launch, try opening the app once, then go to **System Settings → Privacy & Security** and choose **Open Anyway** if you trust the download. [Apple’s first-launch instructions](https://support.apple.com/en-us/102445)
+
+## Activity indicators
+
 Three dots orbit while any local Codex Desktop chat is working. A dot to the left turns yellow for input, green for a recent completion, or red for a recent failed turn. Unanswered question cards can stay yellow for up to ten minutes after a completed turn. The quota percentage stays visible in every state. The app also polls the most recent Codex Cloud tasks through the signed-in CLI. Cloud tasks can show pending work, completion, or failure.
 
 ## Build and run
