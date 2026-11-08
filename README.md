@@ -6,7 +6,7 @@ A native Mac menu bar app that shows your remaining Codex quota. Click the Codex
 
 Requires macOS 14 or later on Apple Silicon or Intel and a local Codex installation signed in with your ChatGPT account. [Get Codex](https://chatgpt.com/codex)
 
-1. [Download Codex Usage for macOS](https://github.com/AdiArya05/codex-usage-menu-bar/releases/latest/download/Codex-Usage-macOS.zip).
+1. [Download Codex Usage for macOS](https://adiarya.vercel.app/downloads/codex-usage-v1.0.0-macos.zip). The same ZIP is listed on the [v1.0.0 GitHub release](https://github.com/AdiArya05/codex-usage-menu-bar/releases/tag/v1.0.0).
 2. Unzip the download and drag **Codex Usage.app** into **Applications**.
 3. Open **Codex Usage** from Applications, then click its icon in the menu bar.
 
