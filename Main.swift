@@ -38,27 +38,43 @@ private func codexIcon(size: CGFloat) -> NSImage {
     return image
 }
 
-private let orbitFrameCount = 120
+private let loadingCycleDuration: TimeInterval = 1.3
+private let loadingFrameCount = 156
 
-private func orbitFrame(at elapsed: TimeInterval) -> Int {
-    let phase = elapsed.truncatingRemainder(dividingBy: 1)
-    return Int((phase * Double(orbitFrameCount)).rounded()) % orbitFrameCount
+private func loadingFrame(at elapsed: TimeInterval) -> Int {
+    let phase = max(0, elapsed).truncatingRemainder(dividingBy: loadingCycleDuration) / loadingCycleDuration
+    return Int((phase * Double(loadingFrameCount)).rounded()) % loadingFrameCount
 }
 
 @MainActor
-private func orbitIcon(frame: Int) -> NSImage {
-    NSImage(size: NSSize(width: 16, height: 16), flipped: false) { bounds in
-        for index in 0..<3 {
-            let phase = 2 * Double.pi * (Double(frame) / Double(orbitFrameCount) + Double(index) / 3)
-            let x = bounds.midX + CGFloat(cos(phase)) * 5.4
-            let y = bounds.midY + CGFloat(sin(phase)) * 5.4
-            let radius = 1.6 - CGFloat(index) * 0.2
-            NSColor.black.withAlphaComponent(1 - CGFloat(index) * 0.15).setFill()
-            NSBezierPath(ovalIn: NSRect(x: x - radius, y: y - radius,
-                                        width: 2 * radius, height: 2 * radius)).fill()
+private enum LoadingArtwork {
+    static let frames = (0..<loadingFrameCount).map { frame in
+        let image = NSImage(size: NSSize(width: 16, height: 16), flipped: false) { bounds in
+            for dot in 0..<6 {
+                let phase = 2 * Double.pi * (0.25 - Double(frame) / Double(loadingFrameCount) - Double(dot) / 6)
+                let center = NSPoint(x: bounds.midX + CGFloat(cos(phase)) * 5.1,
+                                     y: bounds.midY + CGFloat(sin(phase)) * 5.1)
+                let strength = 1 - CGFloat(dot) / 5
+                let radius = 0.81 + 0.73 * strength
+                if dot < 2 {
+                    let glow = NSGradient(starting: .black.withAlphaComponent(0.26 * strength), ending: .clear)
+                    glow?.draw(fromCenter: center, radius: radius, toCenter: center, radius: radius + 1.1)
+                }
+                NSColor.black.withAlphaComponent(0.35 + 0.65 * strength).setFill()
+                NSBezierPath(ovalIn: NSRect(x: center.x - radius, y: center.y - radius,
+                                            width: 2 * radius, height: 2 * radius)).fill()
+            }
+            return true
         }
-        return true
+        image.isTemplate = true
+        image.cacheMode = .always
+        return image
     }
+}
+
+private func requestFastRefresh(_ link: CADisplayLink) {
+    link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
+    link.add(to: .main, forMode: .common)
 }
 
 struct Dashboard: View {
@@ -207,9 +223,10 @@ struct Dashboard: View {
                         .stroke(.green, style: StrokeStyle(lineWidth: 4, lineCap: .round))
                         .rotationEffect(.degrees(-90))
                 }
-                Image(nsImage: codexIcon(size: 20))
                 if usage.expanded && usage.activity.working && row.id == usage.headline?.id {
-                    QuotaOrbit()
+                    LoadingSpinner().frame(width: 20, height: 20)
+                } else {
+                    Image(nsImage: codexIcon(size: 20))
                 }
             }
             .frame(width: 42, height: 42)
@@ -243,20 +260,62 @@ struct Dashboard: View {
     }
 }
 
-private struct QuotaOrbit: View {
+private struct LoadingSpinner: NSViewRepresentable {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    var body: some View {
-        TimelineView(.animation(paused: reduceMotion)) { context in
-            let phase = reduceMotion ? 0 : context.date.timeIntervalSinceReferenceDate
-                .truncatingRemainder(dividingBy: 1.5) / 1.5
-            Circle()
-                .fill(.white)
-                .frame(width: 6, height: 6)
-                .shadow(color: .green.opacity(0.8), radius: 3)
-                .offset(y: -19)
-                .rotationEffect(.degrees(phase * 360))
+    func makeNSView(context: Context) -> LoadingImageView {
+        let view = LoadingImageView()
+        view.image = LoadingArtwork.frames[0]
+        view.imageScaling = .scaleProportionallyUpOrDown
+        view.contentTintColor = .labelColor
+        return view
+    }
+
+    func updateNSView(_ view: LoadingImageView, context: Context) {
+        view.motionEnabled = !reduceMotion
+    }
+
+    static func dismantleNSView(_ view: LoadingImageView, coordinator: ()) {
+        view.motionEnabled = false
+    }
+}
+
+private final class LoadingImageView: NSImageView {
+    var motionEnabled = true {
+        didSet { updateDisplayLink() }
+    }
+
+    private var link: CADisplayLink?
+    private var startedAt: TimeInterval?
+    private var lastFrame = 0
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateDisplayLink()
+    }
+
+    private func updateDisplayLink() {
+        guard window != nil && motionEnabled else {
+            link?.invalidate()
+            link = nil
+            startedAt = nil
+            lastFrame = 0
+            image = LoadingArtwork.frames[0]
+            return
         }
+        guard link == nil else { return }
+        let displayLink = displayLink(target: self, selector: #selector(advance(_:)))
+        link = displayLink
+        requestFastRefresh(displayLink)
+    }
+
+    @objc private func advance(_ link: CADisplayLink) {
+        let start = startedAt ?? link.targetTimestamp
+        startedAt = start
+        let frame = loadingFrame(at: link.targetTimestamp - start)
+        guard frame != lastFrame else { return }
+        lastFrame = frame
+        image = LoadingArtwork.frames[frame]
     }
 }
 
@@ -291,7 +350,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let statusIcon = codexIcon(size: 16)
     private var lastStatus: String?
     private var animation: CADisplayLink?
-    private var orbitStartedAt: CFTimeInterval?
+    private var loadingStartedAt: CFTimeInterval?
     private var frames: [NSImage] = []
     private var frameIndex = 0
     private var attentionDot: NSView?
@@ -434,23 +493,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard frames.count > 1, let button = item.button else {
             animation?.invalidate()
             animation = nil
-            if !usage.activity.working { orbitStartedAt = nil }
+            if !usage.activity.working { loadingStartedAt = nil }
             frameIndex = 0
             return
         }
         guard animation == nil else { return }
 
-        let link = button.displayLink(target: self, selector: #selector(advanceOrbit(_:)))
-        link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
+        let link = button.displayLink(target: self, selector: #selector(advanceLoading(_:)))
         animation = link
-        link.add(to: .main, forMode: .common)
+        requestFastRefresh(link)
     }
 
-    @objc private func advanceOrbit(_ link: CADisplayLink) {
+    @objc private func advanceLoading(_ link: CADisplayLink) {
         let timestamp = link.targetTimestamp
-        let start = orbitStartedAt ?? timestamp
-        orbitStartedAt = start
-        let index = orbitFrame(at: timestamp - start)
+        let start = loadingStartedAt ?? timestamp
+        loadingStartedAt = start
+        let index = loadingFrame(at: timestamp - start)
         guard index != frameIndex, frames.indices.contains(index) else { return }
         frameIndex = index
         item.button?.image = frames[index]
@@ -462,12 +520,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard value != lastStatus else { return }
         lastStatus = value
         let activity = usage.activity
-        let showOrbit = activity.working && !usage.expanded
-        let animateOrbit = showOrbit && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        let frameCount = animateOrbit ? orbitFrameCount : 1
+        let showLoading = activity.working && !usage.expanded
+        let animateLoading = showLoading && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let frameCount = animateLoading ? loadingFrameCount : 1
         let badgeWidth: CGFloat = activity.signal == nil ? 0 : 11
         frames = (0..<frameCount).map { frame in
-            let icon = showOrbit ? orbitIcon(frame: frame) : statusIcon
+            let icon = showLoading ? LoadingArtwork.frames[frame] : statusIcon
             return statusImage(icon: icon, value: value, leading: badgeWidth)
         }
         frameIndex %= frames.count
