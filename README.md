@@ -6,8 +6,8 @@ A native Mac menu bar app that shows your remaining Codex quota. Click the Codex
 
 Requires macOS 14 or later on Apple Silicon or Intel and a local Codex installation signed in with your ChatGPT account. [Get Codex](https://chatgpt.com/codex)
 
-1. [Download Codex Usage for macOS](https://adiarya.vercel.app/downloads/codex-usage-v1.0.0-macos.zip). The same ZIP is listed on the [v1.0.0 GitHub release](https://github.com/AdiArya05/codex-usage-menu-bar/releases/tag/v1.0.0).
-2. Unzip the download and drag **Codex Usage.app** into **Applications**.
+1. [Download Codex Usage for macOS](https://github.com/AdiArya05/codex-usage-menu-bar/releases/latest/download/Codex-Usage-macOS.zip). See the [latest release](https://github.com/AdiArya05/codex-usage-menu-bar/releases/latest) for its version and changes.
+2. Quit any existing copy of Codex Usage. Unzip the download, drag **Codex Usage.app** into **Applications**, and choose **Replace** if prompted.
 3. Open **Codex Usage** from Applications, then click its icon in the menu bar.
 
 ### If macOS blocks the first launch
@@ -18,7 +18,7 @@ You can also build the app from this repository using the instructions below.
 
 ## Activity indicators
 
-Three dots orbit while any local Codex Desktop chat is working. A dot to the left turns yellow for input, green for a recent completion, or red for a recent failed turn. Unanswered question cards can stay yellow for up to ten minutes after a completed turn. The quota percentage stays visible in every state. The app also polls the most recent Codex Cloud tasks through the signed-in CLI. Cloud tasks can show pending work, completion, or failure.
+With Codex Desktop open and signed in, start a local chat to check the animation. Three dots orbit while a local chat is working, and an orb moves around the quota ring when you open the popup. macOS Reduce Motion can make the animation static. A dot to the left turns yellow for input, green for a recent completion, or red for a recent failed turn. Unanswered question cards can stay yellow for up to ten minutes after a completed turn. The quota percentage stays visible in every state. The app also polls the most recent Codex Cloud tasks through the signed-in CLI. Cloud tasks can show pending work, completion, or failure.
 
 ## Build and run
 

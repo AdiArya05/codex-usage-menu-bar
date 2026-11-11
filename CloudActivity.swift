@@ -1,12 +1,22 @@
 import Foundation
 
 func codexExecutable() -> URL? {
-    let candidates = [
-        "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
-        "/Applications/Codex.app/Contents/Resources/codex",
-        "/opt/homebrew/bin/codex", "/usr/local/bin/codex"
-    ] + (ProcessInfo.processInfo.environment["PATH"] ?? "")
+    let home = FileManager.default.homeDirectoryForCurrentUser.path
+    let applicationDirectories = ["/Applications", "\(home)/Applications"]
+    let appNames = ["ChatGPT.app", "Codex.app"]
+    let bundledExecutables = [
+        "codex-cli/CodexCLI.app/Contents/MacOS/codex",
+        "codex-cli/bin/codex",
+        "codex"
+    ]
+    let bundles = applicationDirectories.flatMap { directory in
+        appNames.flatMap { app in
+            bundledExecutables.map { "\(directory)/\(app)/Contents/Resources/\($0)" }
+        }
+    }
+    let pathExecutables = (ProcessInfo.processInfo.environment["PATH"] ?? "")
         .split(separator: ":").map { "\($0)/codex" }
+    let candidates = bundles + ["/opt/homebrew/bin/codex", "/usr/local/bin/codex"] + pathExecutables
     return candidates.first(where: FileManager.default.isExecutableFile(atPath:))
         .map { URL(fileURLWithPath: $0) }
 }
