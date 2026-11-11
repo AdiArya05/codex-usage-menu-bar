@@ -14,7 +14,7 @@ if [[ -e "$output" ]]; then
     exit 2
 fi
 
-if ! security find-identity -v -p codesigning | grep -F -- ""$identity"" >/dev/null; then
+if ! security find-identity -v -p codesigning | grep -F -- "$identity" >/dev/null; then
     echo "Developer ID Application identity with a private key is unavailable." >&2
     exit 1
 fi
