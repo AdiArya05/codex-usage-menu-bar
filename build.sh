@@ -7,8 +7,19 @@ build="$(mktemp -d)"
 trap 'rm -rf "$build"' EXIT
 bundle="$build/Codex Usage.app"
 mkdir -p "$bundle/Contents/MacOS"
-swiftc -O -swift-version 5 -target "$(uname -m)-apple-macosx14.0" \
-    Main.swift Usage.swift Activity.swift Questions.swift CloudActivity.swift -o "$bundle/Contents/MacOS/CodexUsage"
+compile() {
+    swiftc -O -swift-version 5 -target "$1-apple-macosx14.0" \
+        Main.swift Usage.swift Activity.swift Questions.swift CloudActivity.swift -o "$2"
+}
+
+if [[ "${CODEX_USAGE_UNIVERSAL:-0}" == 1 ]]; then
+    compile arm64 "$build/CodexUsage-arm64"
+    compile x86_64 "$build/CodexUsage-x86_64"
+    lipo -create "$build/CodexUsage-arm64" "$build/CodexUsage-x86_64" \
+        -output "$bundle/Contents/MacOS/CodexUsage"
+else
+    compile "$(uname -m)" "$bundle/Contents/MacOS/CodexUsage"
+fi
 cat > "$bundle/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
