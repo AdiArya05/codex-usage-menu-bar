@@ -64,11 +64,7 @@ private func orbitIcon(frame: Int) -> NSImage {
 struct Dashboard: View {
     @ObservedObject var usage: Usage
 
-    private var priorityRows: [QuotaRow] {
-        let available = usage.rows.filter { $0.window.remaining > 0 }.prefix(3)
-        let depleted = usage.rows.filter { $0.window.remaining == 0 }.prefix(2)
-        return Array(available) + depleted
-    }
+    private var priorityRows: [QuotaRow] { QuotaRow.dashboardRows(usage.rows) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -80,12 +76,15 @@ struct Dashboard: View {
                 }
                 .padding(.vertical, 12)
             } else {
-                if priorityRows.isEmpty {
+                if priorityRows.isEmpty && usage.missingPlusWindows.isEmpty {
                     Text("No active quota windows").foregroundStyle(.secondary)
                 } else {
                     section("Usage")
                     VStack(spacing: 12) {
                         ForEach(priorityRows) { quota($0) }
+                        ForEach(usage.missingPlusWindows, id: \.self) { label in
+                            detail(label, "Usage unavailable")
+                        }
                     }
                 }
                 if usage.activity.working {

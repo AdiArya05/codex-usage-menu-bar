@@ -28,7 +28,22 @@ struct Bucket: Decodable {
     let primary: QuotaWindow?
     let secondary: QuotaWindow?
     let credits: Credits?
+    let planType: String?
     var windows: [QuotaWindow] { [primary, secondary].compactMap { $0 } }
+
+    // The map and live notifications can omit one of the two quota windows.
+    func fillingMissingWindows(from fallback: Bucket?) -> Bucket {
+        guard let fallback else { return self }
+        var merged = windows
+        for window in fallback.windows where merged.count < 2 {
+            if !merged.contains(where: { $0.windowDurationMins == window.windowDurationMins }) {
+                merged.append(window)
+            }
+        }
+        return Bucket(limitId: limitId ?? fallback.limitId, limitName: limitName ?? fallback.limitName,
+                      primary: merged.first, secondary: merged.dropFirst().first,
+                      credits: credits ?? fallback.credits, planType: planType ?? fallback.planType)
+    }
 }
 
 struct EarnedResets: Decodable {
@@ -44,12 +59,33 @@ struct Limits: Decodable {
     let rateLimits: Bucket
     let rateLimitsByLimitId: [String: Bucket]?
     let rateLimitResetCredits: EarnedResets?
+
+    var buckets: [String: Bucket] {
+        var result = rateLimitsByLimitId ?? [:]
+        let key = rateLimits.limitId ?? "codex"
+        result[key] = result[key]?.fillingMissingWindows(from: rateLimits) ?? rateLimits
+        return result
+    }
 }
 
 struct QuotaRow: Identifiable {
     let id: String
     let name: String
     let window: QuotaWindow
+
+    var isCoreCodexWindow: Bool {
+        id.hasPrefix("codex:") && [300, 10080].contains(window.windowDurationMins ?? 0)
+    }
+
+    static func dashboardRows(_ rows: [QuotaRow]) -> [QuotaRow] {
+        let core = rows.filter(\.isCoreCodexWindow)
+            .sorted { ($0.window.windowDurationMins ?? 0) < ($1.window.windowDurationMins ?? 0) }
+        let extra = rows.filter { !$0.isCoreCodexWindow }
+        let available = max(0, 3 - core.filter { $0.window.remaining > 0 }.count)
+        let depleted = max(0, 2 - core.filter { $0.window.remaining == 0 }.count)
+        return core + extra.filter { $0.window.remaining > 0 }.prefix(available)
+            + extra.filter { $0.window.remaining == 0 }.prefix(depleted)
+    }
 }
 
 func countdown(_ date: Date, now: Date) -> String {
@@ -67,6 +103,7 @@ final class Usage: ObservableObject {
     @Published private(set) var resets: EarnedResets?
     @Published private(set) var credits: Bucket.Credits?
     @Published private(set) var account = "Personal"
+    @Published private(set) var accountPlan: String?
     @Published private(set) var now = Date()
     @Published private(set) var lastSync: Date?
     @Published private(set) var nextSync: Date?
@@ -85,8 +122,7 @@ final class Usage: ObservableObject {
     private var requestID = 0
     private var pendingID: Int?
     private var deadline: Date?
-    private var readStarted: Date?
-    private var eventTimes: [String: Date] = [:]
+    private var updatesDuringRead: [String: Bucket] = [:]
     private var ready = false
     private var authURL: URL?
     private var authFingerprint: Date?
@@ -95,6 +131,12 @@ final class Usage: ObservableObject {
     var headline: QuotaRow? {
         rows.first { $0.id.hasPrefix("codex:") } ?? rows.first
     }
+    var missingPlusWindows: [String] {
+        guard (buckets["codex"]?.planType ?? accountPlan) == "plus" else { return [] }
+        let durations = Set(rows.filter(\.isCoreCodexWindow).compactMap { $0.window.windowDurationMins })
+        return [(300, "5-hour"), (10080, "Weekly")].compactMap { durations.contains($0.0) ? nil : $0.1 }
+    }
+
     var nextReset: Date? { rows.compactMap { $0.window.reset }.filter { $0 > now }.min() }
     var nextExpiry: Date? {
         resets?.credits?.filter { $0.status == nil || $0.status == "available" }
@@ -119,7 +161,7 @@ final class Usage: ObservableObject {
         if process == nil { connect(); return }
         guard ready else { return }
         syncing = true
-        readStarted = Date()
+        updatesDuringRead.removeAll()
         deadline = Date().addingTimeInterval(12)
         requestID += 1
         pendingID = requestID
@@ -217,7 +259,7 @@ final class Usage: ObservableObject {
         syncing = false
         pendingID = nil
         deadline = nil
-        eventTimes.removeAll()
+        updatesDuringRead.removeAll()
     }
 
     private func send(_ message: [String: Any]) {
@@ -264,6 +306,7 @@ final class Usage: ObservableObject {
             let result = message["result"] as? [String: Any]
             if let details = result?["account"] as? [String: Any] {
                 account = details["email"] as? String ?? "Personal"
+                accountPlan = details["planType"] as? String
             }
         } else if let id, id == pendingID {
             pendingID = nil
@@ -273,16 +316,12 @@ final class Usage: ObservableObject {
                 fail("Couldn’t read Codex usage")
                 return
             }
-            var updated = limits.rateLimitsByLimitId ?? [:]
-            let key = limits.rateLimits.limitId ?? "codex"
-            if updated[key] == nil { updated[key] = limits.rateLimits }
-            if let readStarted {
-                for (id, time) in eventTimes where time >= readStarted {
-                    updated[id] = buckets[id] ?? updated[id]
-                }
+            var updated = limits.buckets
+            for (id, notification) in updatesDuringRead {
+                updated[id] = notification.fillingMissingWindows(from: updated[id])
             }
             buckets = updated
-            eventTimes.removeAll()
+            updatesDuringRead.removeAll()
             resets = limits.rateLimitResetCredits
             credits = buckets["codex"]?.credits ?? limits.rateLimits.credits
             lastSync = Date()
@@ -294,8 +333,10 @@ final class Usage: ObservableObject {
                   let bucket = decode(params["rateLimits"], as: Bucket.self) {
             guard lastSync != nil else { return }
             let key = bucket.limitId ?? "codex"
-            buckets[key] = bucket
-            eventTimes[key] = Date()
+            buckets[key] = bucket.fillingMissingWindows(from: buckets[key])
+            if pendingID != nil {
+                updatesDuringRead[key] = bucket.fillingMissingWindows(from: updatesDuringRead[key])
+            }
             if key == "codex", let balance = bucket.credits { credits = balance }
             publishRows()
         } else if message["method"] as? String == "account/updated", ready {
@@ -312,7 +353,10 @@ final class Usage: ObservableObject {
     private func publishRows() {
         rows = buckets.flatMap { key, bucket in
             bucket.windows.enumerated().map { index, window in
-                QuotaRow(id: "\(key):\(index)", name: bucket.limitName ?? (key == "codex" ? "Codex" : key), window: window)
+                let duration = window.windowDurationMins.map(String.init) ?? "unknown"
+                let duplicate = bucket.windows.prefix(index).contains { $0.windowDurationMins == window.windowDurationMins }
+                let rowID = duplicate ? "\(key):\(duration):\(index)" : "\(key):\(duration)"
+                return QuotaRow(id: rowID, name: bucket.limitName ?? (key == "codex" ? "Codex" : key), window: window)
             }
         }.sorted { a, b in
             if a.window.remaining != b.window.remaining { return a.window.remaining < b.window.remaining }
@@ -328,6 +372,8 @@ final class Usage: ObservableObject {
         credits = nil
         lastSync = nil
         account = "Personal"
+        accountPlan = nil
+        updatesDuringRead.removeAll()
         onChange?()
     }
 

@@ -1,6 +1,6 @@
 # Codex Usage
 
-A native Mac menu bar app that shows your remaining Codex quota. Click the Codex icon for a compact panel with live usage, reset countdowns, and earned reset credits.
+A native Mac menu bar app that shows your remaining Codex quota. Click the Codex icon for a compact panel with live usage, reset countdowns, and earned reset credits. The dashboard keeps the 5-hour and weekly Codex windows visible when reported for your account.
 
 ## Install
 
@@ -29,7 +29,7 @@ Build with the macOS 26 SDK or newer. The app runs on macOS 14 or newer and uses
 open "$HOME/Applications/Codex Usage.app"
 ```
 
-The app reads your usage through the locally installed Codex App Server and its existing sign-in.
+The app reads your usage through the locally installed Codex App Server and its existing sign-in. It uses an OpenAI-signed native CLI from ChatGPT or Codex in Applications, or from a standard Homebrew prefix.
 
 ## Build a notarized release
 

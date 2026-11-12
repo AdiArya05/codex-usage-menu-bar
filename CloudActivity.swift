@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 func codexExecutable() -> URL? {
     let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -9,16 +10,42 @@ func codexExecutable() -> URL? {
         "codex-cli/bin/codex",
         "codex"
     ]
-    let bundles = applicationDirectories.flatMap { directory in
-        appNames.flatMap { app in
-            bundledExecutables.map { "\(directory)/\(app)/Contents/Resources/\($0)" }
+    for directory in applicationDirectories {
+        for app in appNames {
+            let bundle = "\(directory)/\(app)"
+            for executable in bundledExecutables {
+                if let trusted = trustedCodexExecutable(
+                    at: "\(bundle)/Contents/Resources/\(executable)", under: bundle
+                ) {
+                    return trusted
+                }
+            }
         }
     }
-    let pathExecutables = (ProcessInfo.processInfo.environment["PATH"] ?? "")
-        .split(separator: ":").map { "\($0)/codex" }
-    let candidates = bundles + ["/opt/homebrew/bin/codex", "/usr/local/bin/codex"] + pathExecutables
-    return candidates.first(where: FileManager.default.isExecutableFile(atPath:))
-        .map { URL(fileURLWithPath: $0) }
+    for prefix in ["/opt/homebrew", "/usr/local"] {
+        if let trusted = trustedCodexExecutable(at: "\(prefix)/bin/codex", under: prefix) {
+            return trusted
+        }
+    }
+    return nil
+}
+
+func trustedCodexExecutable(at path: String, under installation: String) -> URL? {
+    guard path.hasPrefix("/"), installation.hasPrefix("/"),
+          FileManager.default.isExecutableFile(atPath: path) else { return nil }
+    let executable = URL(fileURLWithPath: path).resolvingSymlinksInPath()
+    guard executable.path.hasPrefix(installation + "/") else { return nil }
+
+    let openAIRequirement = #"anchor apple generic and identifier "codex" and certificate leaf[subject.OU] = "2DC432GLL2""#
+    var requirement: SecRequirement?
+    var code: SecStaticCode?
+    guard SecRequirementCreateWithString(openAIRequirement as CFString, [], &requirement) == errSecSuccess,
+          let requirement,
+          SecStaticCodeCreateWithPath(executable as CFURL, [], &code) == errSecSuccess,
+          let code,
+          SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: kSecCSStrictValidate | kSecCSCheckAllArchitectures),
+                                     requirement) == errSecSuccess else { return nil }
+    return executable
 }
 
 /// Cloud tasks use a separate authenticated CLI feed from local Desktop turns.
