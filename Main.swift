@@ -2,6 +2,9 @@ import AppKit
 import CoreText
 import QuartzCore
 import SwiftUI
+#if CODEX_USAGE_SPARKLE
+import Sparkle
+#endif
 
 @MainActor
 private func codexIcon(size: CGFloat) -> NSImage {
@@ -63,6 +66,7 @@ private func orbitIcon(frame: Int) -> NSImage {
 
 struct Dashboard: View {
     @ObservedObject var usage: Usage
+    var checkForUpdates: (() -> Void)?
 
     private var priorityRows: [QuotaRow] { QuotaRow.dashboardRows(usage.rows) }
 
@@ -103,6 +107,9 @@ struct Dashboard: View {
                 Spacer()
                 Menu {
                     Button("Refresh now") { usage.refresh() }
+                    if let checkForUpdates {
+                        Button("Check for Updates…", action: checkForUpdates)
+                    }
                     Divider()
                     Button("Quit Codex Usage") { NSApp.terminate(nil) }
                 } label: {
@@ -198,17 +205,18 @@ struct Dashboard: View {
 
     private func quota(_ row: QuotaRow) -> some View {
         let value = row.window.remaining
+        let ringColor: Color = row.window.windowDurationMins == 300 ? .blue : .green
         return HStack(spacing: 12) {
             ZStack {
                 Circle().strokeBorder(.secondary.opacity(0.26), lineWidth: 4)
                 if value > 0 {
                     Circle().inset(by: 2).trim(from: 0, to: CGFloat(value) / 100)
-                        .stroke(.green, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                        .stroke(ringColor, style: StrokeStyle(lineWidth: 4, lineCap: .round))
                         .rotationEffect(.degrees(-90))
                 }
                 Image(nsImage: codexIcon(size: 20))
                 if usage.expanded && usage.activity.working && row.id == usage.headline?.id {
-                    QuotaOrbit()
+                    QuotaOrbit(color: ringColor)
                 }
             }
             .frame(width: 42, height: 42)
@@ -243,6 +251,7 @@ struct Dashboard: View {
 }
 
 private struct QuotaOrbit: View {
+    let color: Color
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -252,7 +261,7 @@ private struct QuotaOrbit: View {
             Circle()
                 .fill(.white)
                 .frame(width: 6, height: 6)
-                .shadow(color: .green.opacity(0.8), radius: 3)
+                .shadow(color: color.opacity(0.8), radius: 3)
                 .offset(y: -19)
                 .rotationEffect(.degrees(phase * 360))
         }
@@ -285,7 +294,19 @@ private final class PriorityPanel: NSPanel {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let usage = Usage()
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-    private lazy var dashboard = NSHostingView(rootView: Dashboard(usage: usage))
+    #if CODEX_USAGE_SPARKLE
+    private let updater = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: nil, userDriverDelegate: nil)
+    #endif
+    private lazy var dashboard: NSHostingView<Dashboard> = {
+        #if CODEX_USAGE_SPARKLE
+        return NSHostingView(rootView: Dashboard(usage: usage, checkForUpdates: { [weak self] in
+            self?.dismiss()
+            self?.updater.checkForUpdates(nil)
+        }))
+        #else
+        return NSHostingView(rootView: Dashboard(usage: usage))
+        #endif
+    }()
     private lazy var panel = makePanel()
     private let statusIcon = codexIcon(size: 16)
     private var lastStatus: String?
@@ -311,6 +332,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateStatus()
         usage.start()
         activityMonitor.start()
+        #if CODEX_USAGE_SPARKLE
+        updater.startUpdater()
+        #endif
         NSWorkspace.shared.notificationCenter.addObserver(
             self, selector: #selector(wake), name: NSWorkspace.didWakeNotification, object: nil
         )
