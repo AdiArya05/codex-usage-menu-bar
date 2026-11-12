@@ -1,0 +1,18 @@
+<?xml version="1.0" standalone="yes"?><!-- sparkle-sign-warning:
+IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
+--><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>Codex Usage</title>
+        <item>
+            <title>1.0.3</title>
+            <pubDate>Thu, 12 Nov 2026 20:47:18 +0800</pubDate>
+            <sparkle:version>4</sparkle:version>
+            <sparkle:shortVersionString>1.0.3</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/AdiArya05/codex-usage-menu-bar/releases/download/v1.0.3/Codex-Usage-macOS.zip" length="1523466" type="application/octet-stream" sparkle:edSignature="PP1y9MkdJPwtnj5Eqe8BX9JUE6RiAwhzh60K50Ts8l4A1QzCoH6vy4+jB35PLU2nUGsgxJY2nAv2ImZMRyyKCw=="></enclosure>
+        </item>
+    </channel>
+</rss><!-- sparkle-signatures:
+edSignature: Q4TXQqd6NNxZplH+RMJlNGVZI0GuafFN5KS+GK3wtNwC4XSIoSA19TtFwkELEGPMi/CVf+0NUAEjjs1/MB0kCg==
+length: 1060
+-->
